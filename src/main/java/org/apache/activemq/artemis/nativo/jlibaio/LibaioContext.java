@@ -47,7 +47,7 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
    /**
     * The Native layer will look at this version.
     */
-   private static final int EXPECTED_NATIVE_VERSION = 9;
+   private static final int EXPECTED_NATIVE_VERSION = 10;
 
    private static boolean loaded = false;
 
@@ -106,6 +106,11 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
    }
 
    private static native void shutdownHook();
+
+   private static native void setForceSyscall(boolean value);
+
+   /** The system may choose to set this if a failing condition happened inside the code. */
+   private static native boolean isForceSyscall();
 
    /**
     * This is used to validate leaks on tests.

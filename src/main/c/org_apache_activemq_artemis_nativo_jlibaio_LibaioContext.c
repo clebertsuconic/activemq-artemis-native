@@ -22,6 +22,8 @@
 
 //#define DEBUG
 
+
+
 #include <jni.h>
 #include <unistd.h>
 #include <errno.h>
@@ -40,7 +42,6 @@
 #define mem_barrier() __asm__ __volatile__ ("":::"memory")
 #define read_barrier()	__asm__ __volatile__("":::"memory")
 #define store_barrier()	__asm__ __volatile__("":::"memory")
-
 struct io_control {
     io_context_t ioContext;
     struct io_event * events;
@@ -70,6 +71,8 @@ struct io_control {
 #define AIO_RING_MAGIC	0xa10a10a1
 #define AIO_RING_INCOMPAT_FEATURES	0
 
+// set this to 0 if you want to stop using ring reaping
+#define RING_REAPER 1
 
 /** There is no defined aio_ring anywhere in an include,
     This is an implementation detail, that is a binary contract.
@@ -86,8 +89,11 @@ struct aio_ring {
 	unsigned	header_length;	/* size of aio_ring */
 
 
-	struct io_event		io_events[0];
+	struct io_event		events[0];
 }; /* 128 bytes + ring size */
+
+
+jboolean forceSysCall = JNI_FALSE;
 
 // Check if the implementation supports AIO_RING by checking this number directly.
 static inline int has_usable_ring(struct aio_ring *ring) {
@@ -100,57 +106,44 @@ static inline struct aio_ring* to_aio_ring(io_context_t aio_ctx) {
     return (struct aio_ring*) aio_ctx;
 }
 
+static int user_io_getevents(io_context_t aio_ctx, unsigned int max,
+                    struct io_event *events)
+{
+   long i = 0;
+   unsigned head;
+   struct aio_ring *ring = to_aio_ring(aio_ctx);
+
+   while (i < max) {
+      head = ring->head;
+      mem_barrier();
+
+      if (head == ring->tail) {
+         /* There are no more completions */
+         break;
+      } else {
+         read_barrier();
+         /* There is another completion to reap */
+         events[i] = ring->events[head];
+         store_barrier();
+         ring->head = (head + 1) % ring->nr;
+         i++;
+      }
+   }
+
+   return i;
+}
+
 //It implements a user space batch read io events implementation that attempts to read io avoiding any sys calls
 // This implementation will look at the internal structure (aio_ring) and move along the memory result
 static int ringio_get_events(io_context_t aio_ctx, long min_nr, long max,
                                                        struct io_event *events, struct timespec *timeout) {
     struct aio_ring *ring = to_aio_ring(aio_ctx);
     //checks if it could be completed in user space, saving a sys call
-    if (has_usable_ring(ring)) {
-        const unsigned ring_nr = ring->nr;
-        // We're assuming to be the exclusive writer to head, so we just need a compiler barrier
-        unsigned head = ring->head;
-        mem_barrier();
-        const unsigned tail = ring->tail;
-        int available = tail - head;
-        if (available < 0) {
-            //a wrap has occurred
-            available += ring_nr;
+    if (RING_REAPER && !forceSysCall && has_usable_ring(ring)) {
+        int used = user_io_getevents(aio_ctx, max, events);
+        if (used > 0) {
+           return used;
         }
-        #ifdef DEBUG
-            fprintf(stdout, "tail = %d head= %d nr = %d available = %d\n", tail, head, ring_nr, available);
-        #endif
-        if ((available >= min_nr) || (timeout && timeout->tv_sec == 0 && timeout->tv_nsec == 0)) {
-            if (!available) {
-                return 0;
-            }
-            //the kernel has written ring->tail from an interrupt:
-            //we need to load acquire the completed events here
-            read_barrier();
-            const int available_nr = available < max? available : max;
-            //if isn't needed to wrap we can avoid % operations that are quite expansive
-            const int needMod = ((head + available_nr) >= ring_nr) ? 1 : 0;
-            for (int i = 0; i<available_nr; i++) {
-                events[i] = ring->io_events[head];
-                if (needMod == 1) {
-                    head = (head + 1) % ring_nr;
-                } else {
-                    head = (head + 1);
-                }
-            }
-            //it allow the kernel to build its own view of the ring buffer size
-            //and push new events if there are any
-            store_barrier();
-            ring->head = head;
-            #ifdef DEBUG
-                fprintf(stdout, "consumed non sys-call = %d\n", available_nr);
-            #endif
-            return available_nr;
-        }
-    } else {
-        #ifdef DEBUG
-            fprintf(stdout, "The kernel is not supoprting the ring buffer any longer\n");
-        #endif
     }
     int sys_call_events = io_getevents(aio_ctx, min_nr, max, events, timeout);
     #ifdef DEBUG
@@ -178,8 +171,6 @@ jmethodID libaioContextDone = NULL;
 jclass libaioContextClass = NULL;
 jclass runtimeExceptionClass = NULL;
 jclass ioExceptionClass = NULL;
-jclass nioBufferClass = NULL;
-jfieldID nioBufferAddressFieldId = NULL;
 
 // util methods
 void throwRuntimeException(JNIEnv* env, char* message) {
@@ -333,13 +324,6 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved) {
            return JNI_ERR;
         }
 
-        nioBufferClass = (*env)->FindClass(env, "java/nio/Buffer");
-        if (nioBufferClass == NULL) {
-           return JNI_ERR;
-        }
-        nioBufferClass = (jclass)(*env)->NewGlobalRef(env, (jobject)nioBufferClass);
-        nioBufferAddressFieldId = (*env)->GetFieldID(env, nioBufferClass, "address", "J");
-
         return JNI_VERSION_1_6;
     }
 }
@@ -385,10 +369,6 @@ void JNI_OnUnload(JavaVM* vm, void* reserved) {
         if (libaioContextClass != NULL) {
             (*env)->DeleteGlobalRef(env, (jobject)libaioContextClass);
         }
-
-        if (nioBufferClass != NULL) {
-            (*env)->DeleteGlobalRef(env, (jobject)nioBufferClass);
-        }
     }
 }
 
@@ -399,8 +379,7 @@ JNIEXPORT void JNICALL Java_org_apache_activemq_artemis_nativo_jlibaio_LibaioCon
 
 
 static inline struct io_control * getIOControl(JNIEnv* env, jobject pointer) {
-    jlong address = (*env)->GetLongField(env, pointer, nioBufferAddressFieldId);
-    struct io_control * ioControl = (struct io_control *) address;
+    struct io_control * ioControl = (struct io_control *) (*env)->GetDirectBufferAddress(env, pointer);
     if (ioControl == NULL) {
        throwRuntimeException(env, "Controller not initialized");
     }
@@ -468,7 +447,7 @@ static inline short submit(JNIEnv * env, struct io_control * theControl, struct 
 }
 
 static inline void * getBuffer(JNIEnv* env, jobject pointer) {
-    return (void *) (*env)->GetLongField(env, pointer, nioBufferAddressFieldId);;
+    return (*env)->GetDirectBufferAddress(env, pointer);
 }
 
 JNIEXPORT jboolean JNICALL Java_org_apache_activemq_artemis_nativo_jlibaio_LibaioContext_lock
@@ -731,7 +710,6 @@ JNIEXPORT void JNICALL Java_org_apache_activemq_artemis_nativo_jlibaio_LibaioCon
 
 JNIEXPORT void JNICALL Java_org_apache_activemq_artemis_nativo_jlibaio_LibaioContext_blockedPoll
   (JNIEnv * env, jobject thisObject, jobject contextPointer, jboolean useFdatasync) {
-
     #ifdef DEBUG
        fprintf (stdout, "Running blockedPoll\n");
        fflush(stdout);
@@ -818,12 +796,15 @@ JNIEXPORT void JNICALL Java_org_apache_activemq_artemis_nativo_jlibaio_LibaioCon
             }
 
             jobject obj = (jobject)iocbp->data;
-            putIOCB(theControl, iocbp);
+            iocbp->data = NULL; // this is to detect invalid elements on the buffer.
 
             if (obj != NULL) {
+                putIOCB(theControl, iocbp);
                 (*env)->CallVoidMethod(env, theControl->thisObject, libaioContextDone,obj);
                 // We delete the globalRef after the completion of the callback
                 (*env)->DeleteGlobalRef(env, obj);
+            } else {
+               fprintf (stderr, "ouch!!!! it was null!!!!, system would crash!!!! \n");
             }
 
         }
@@ -908,7 +889,7 @@ JNIEXPORT void JNICALL Java_org_apache_activemq_artemis_nativo_jlibaio_LibaioCon
        throwRuntimeException(env, "Null pointer");
        return;
     }
-  	void *  buffer = getBuffer(env, jbuffer);
+  	void *  buffer = (*env)->GetDirectBufferAddress(env, jbuffer);
   	free(buffer);
 }
 
@@ -1023,7 +1004,7 @@ JNIEXPORT void JNICALL Java_org_apache_activemq_artemis_nativo_jlibaio_LibaioCon
     #ifdef DEBUG
         fprintf (stdout, "Mem setting buffer with %d bytes\n", size);
     #endif
-    void * buffer = getBuffer(env, jbuffer);
+    void * buffer = (*env)->GetDirectBufferAddress(env, jbuffer);
 
     if (buffer == 0)
     {
