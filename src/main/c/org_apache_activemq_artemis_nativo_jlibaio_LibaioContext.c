@@ -119,8 +119,11 @@ static int user_io_getevents(io_context_t aio_ctx, unsigned int max,
                avail = ring->nr - (head - tail);
 
        if (avail >= max) {
-               while (ring->tail == tail)
+               fprintf (stderr, "entering workaround\n");
+               while (ring->tail == tail)  {
+                       fprintf (stderr, "working\n");
                        mem_barrier();
+               }
        }
 
        while (i < max) {
