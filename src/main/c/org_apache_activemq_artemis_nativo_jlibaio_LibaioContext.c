@@ -110,8 +110,23 @@ static int user_io_getevents(io_context_t aio_ctx, unsigned int max,
                     struct io_event *events)
 {
    long i = 0;
-   unsigned head;
+   unsigned head, tail, avail;
    struct aio_ring *ring = to_aio_ring(aio_ctx);
+
+   head = ring->head;
+   mem_barrier();
+   tail = ring->tail;
+
+   if (tail >= head)
+      avail = tail - head;
+   else
+      avail = ring->nr - (head - tail);
+
+   if (avail >= max) {
+      while (ring->tail == tail)  {
+         mem_barrier();
+      }
+   }
 
    while (i < max) {
       head = ring->head;
