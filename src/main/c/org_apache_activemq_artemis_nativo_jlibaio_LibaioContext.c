@@ -106,6 +106,7 @@ static int user_io_getevents(io_context_t aio_ctx, unsigned int max,
                     struct io_event *events)
    {
     long i = 0;
+       int x;
        unsigned head, tail, avail;
        struct aio_ring *ring = to_aio_ring(aio_ctx);
 
@@ -119,9 +120,18 @@ static int user_io_getevents(io_context_t aio_ctx, unsigned int max,
                avail = ring->nr - (head - tail);
 
        if (avail >= max) {
-               fprintf (stderr, "entering workaround\n");
+               usedinvalid ++;
+               for  (x = 0; x < 10; x++) {
+                 fprintf (stderr, "entering workaround\n");
+                 fprintf (stdout, "entering workaround\n");
+                 fflush(stderr);
+                 fflush(stdout);
+               }
                while (ring->tail == tail)  {
                        fprintf (stderr, "working\n");
+                       fprintf (stdout, "working\n");
+                       fflush(stderr);
+                       fflush(stdout);
                        mem_barrier();
                }
        }
