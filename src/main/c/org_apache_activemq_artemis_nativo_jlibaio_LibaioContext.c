@@ -132,10 +132,10 @@ static int ringio_get_events(io_context_t aio_ctx, long min_nr, long max,
     struct aio_ring *ring = to_aio_ring(aio_ctx);
     //checks if it could be completed in user space, saving a sys call
     if (RING_REAPER && !forceSysCall && has_usable_ring(ring)) {
-        const unsigned ring_nr = ring->nr;
         // We're assuming to be the exclusive writer to head, so we just need a compiler barrier
-        unsigned head = ring->head;
         mem_barrier();
+        unsigned head = ring->head;
+        const unsigned ring_nr = ring->nr;
         const unsigned tail = ring->tail;
         int available = tail - head;
         if (available < 0) {
@@ -151,6 +151,7 @@ static int ringio_get_events(io_context_t aio_ctx, long min_nr, long max,
             }
 
             if (available >= max) {
+               fprintf (stderr, "trap first try\n"); fflush(stderr);
                short retryTail = 0;
                // we first wait for 20 iterations, to see if the tail moved
                for (retryTail = 0; retryTail < 20 && ring->tail == tail; retryTail++) {
@@ -166,6 +167,7 @@ static int ringio_get_events(io_context_t aio_ctx, long min_nr, long max,
                //
                // however eventually we could have available==max in a legal situation what could lead to infinite loop here
                if (retryTail == 20) {
+                   fprintf (stderr, "trap second try\n"); fflush(stderr);
                    // if the tail didn't move, we will then perform a regular syscall
                    return io_getevents(aio_ctx, min_nr, max, events, timeout);
                }
