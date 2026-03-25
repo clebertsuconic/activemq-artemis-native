@@ -17,7 +17,9 @@
 package org.apache.activemq.artemis.nativo.jlibaio;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
+import java.util.Objects;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,7 +45,7 @@ public final class LibaioFile<Callback extends SubmitInfo> implements AutoClosea
       this.fd = fd;
    }
 
-   public int getBlockSize() {
+   public int getBlockSize() throws IOException {
       return LibaioContext.getBlockSizeFD(fd);
    }
 
@@ -60,7 +62,7 @@ public final class LibaioFile<Callback extends SubmitInfo> implements AutoClosea
    /**
     * @return The size of the file.
     */
-   public long getSize() {
+   public long getSize() throws IOException {
       return LibaioContext.getSize(fd);
    }
 
@@ -79,6 +81,7 @@ public final class LibaioFile<Callback extends SubmitInfo> implements AutoClosea
     * @throws java.io.IOException in case of error
     */
    public void write(long position, int size, ByteBuffer buffer, Callback callback) throws IOException {
+      Objects.requireNonNull(callback, "Callback cannot be null");
       ctx.submitWrite(fd, position, size, buffer, callback);
    }
 
@@ -99,6 +102,7 @@ public final class LibaioFile<Callback extends SubmitInfo> implements AutoClosea
     * @see LibaioContext#poll(SubmitInfo[], int, int)
     */
    public void read(long position, int size, ByteBuffer buffer, Callback callback) throws IOException {
+      Objects.requireNonNull(callback, "Callback cannot be null");
       ctx.submitRead(fd, position, size, buffer, callback);
    }
 
@@ -107,12 +111,12 @@ public final class LibaioFile<Callback extends SubmitInfo> implements AutoClosea
     * Buffers here are allocated with posix_memalign.
     * <br>
     * You need to explicitly free the buffer created from here using the
-    * {@link LibaioContext#freeBuffer(java.nio.ByteBuffer)}.
+    * {@link LibaioContext#freeBuffer(java.lang.foreign.MemorySegment)}.
     *
     * @param size the size of the buffer.
     * @return the buffer allocated.
     */
-   public ByteBuffer newBuffer(int size) {
+   public MemorySegment newBuffer(int size) {
       return LibaioContext.newAlignedBuffer(size, 4 * 1024);
    }
 
@@ -121,7 +125,7 @@ public final class LibaioFile<Callback extends SubmitInfo> implements AutoClosea
     *
     * @param size number of bytes to be filled on the file
     */
-   public void fill(int alignment, long size) {
+   public void fill(int alignment, long size) throws IOException {
       try {
          LibaioContext.fill(fd, alignment, size);
       } catch (OutOfMemoryError e) {
@@ -135,7 +139,7 @@ public final class LibaioFile<Callback extends SubmitInfo> implements AutoClosea
     *
     * @param size number of bytes to be filled on the file
     */
-   public void fallocate(long size) {
+   public void fallocate(long size) throws IOException {
       LibaioContext.fallocate(fd, size);
    }
 

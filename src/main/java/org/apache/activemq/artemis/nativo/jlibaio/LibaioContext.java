@@ -19,6 +19,7 @@ package org.apache.activemq.artemis.nativo.jlibaio;
 import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -26,6 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.apache.activemq.artemis.nativo.jlibaio.ffm.FFMNativeHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -59,7 +61,7 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
     */
    private static final int EXPECTED_NATIVE_VERSION = 200;
 
-   private static boolean loaded = false;
+   private static boolean loaded = true;
 
    private static final AtomicBoolean shuttingDown = new AtomicBoolean(false);
 
@@ -87,30 +89,16 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
    }
 
    static {
-      String[] libraries = new String[]{"artemis-native-64", "artemis-native-32"};
-
-      for (String library : libraries) {
-         if (loadLibrary(library)) {
-            loaded = true;
-            if (System.getProperty("org.apache.activemq.artemis.native.jlibaio.FORCE_SYSCALL") != null) {
-               LibaioContext.setForceSyscall(true);
-            }
-            Runtime.getRuntime().addShutdownHook(new Thread() {
-               @Override
-               public void run() {
-                  shuttingDown.set(true);
-                  checkShutdown();
-               }
-            });
-            break;
-         } else {
-            logger.debug("Library {} not found!", library);
+      if (System.getProperty("org.apache.activemq.artemis.native.jlibaio.FORCE_SYSCALL") != null) {
+         LibaioContext.setForceSyscall(true);
+      }
+      Runtime.getRuntime().addShutdownHook(new Thread() {
+         @Override
+         public void run() {
+            shuttingDown.set(true);
+            checkShutdown();
          }
-      }
-
-      if (!loaded) {
-         logger.debug("Couldn't locate LibAIO Wrapper");
-      }
+      });
    }
 
    private static void checkShutdown() {
@@ -119,12 +107,18 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
       }
    }
 
-   private static native void shutdownHook();
+   private static void shutdownHook() {
+      FFMNativeHelper.shutdownHook();
+   }
 
-   public static native void setForceSyscall(boolean value);
+   public static void setForceSyscall(boolean value) {
+      FFMNativeHelper.setForceSyscall(value);
+   }
 
    /** The system may choose to set this if a failing condition happened inside the code. */
-   public static native boolean isForceSyscall();
+   public static boolean isForceSyscall() {
+      return FFMNativeHelper.isForceSyscall();
+   }
 
    /**
     * This is used to validate leaks on tests.
@@ -155,7 +149,7 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
    /**
     * the native ioContext including the structure created.
     */
-   private final ByteBuffer ioContext;
+   private final MemorySegment ioContext;
 
    private final AtomicBoolean closed = new AtomicBoolean(false);
 
@@ -164,6 +158,8 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
    final int queueSize;
 
    final boolean useFdatasync;
+
+   final FFMNativeHelper<Callback> ffmNativeHelper;
 
    /**
     * The queue size here will use resources defined on the kernel parameter
@@ -176,6 +172,7 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
     */
    public LibaioContext(int queueSize, boolean useSemaphore, boolean useFdatasync) {
       try {
+         this.ffmNativeHelper = new FFMNativeHelper<>(this::releaseSemaphore);
          contexts.incrementAndGet();
          this.ioContext = newContext(queueSize);
          this.useFdatasync = useFdatasync;
@@ -369,11 +366,7 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
       }
    }
 
-   /**
-    * Called from the native layer
-    */
-   private void done(SubmitInfo info) {
-      info.done();
+   private void releaseSemaphore() {
       if (ioSpace != null) {
          ioSpace.release();
       }
@@ -382,12 +375,16 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
    /**
     * This is the queue for libaio, initialized with queueSize.
     */
-   private native ByteBuffer newContext(int queueSize);
+   private MemorySegment newContext(int queueSize) {
+      return this.ffmNativeHelper.newContext(queueSize);
+   }
 
    /**
     * Internal method to be used when closing the controller.
     */
-   private native void deleteContext(ByteBuffer buffer);
+   private void deleteContext(MemorySegment buffer) {
+      this.ffmNativeHelper.deleteContext(buffer);
+   }
 
    /**
     * it will return a file descriptor.
@@ -396,9 +393,13 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
     * @param direct translates as O_DIRECT On open
     * @return a fd from open C call.
     */
-   public static native int open(String path, boolean direct);
+   public static int open(String path, boolean direct) throws IOException {
+      return FFMNativeHelper.open(path, direct);
+   }
 
-   public static native void close(int fd);
+   public static void close(int fd) throws IOException {
+      FFMNativeHelper.close(fd);
+   }
 
    /**
     */
@@ -412,34 +413,42 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
     * @param alignment the alignment used at the dispositive
     * @return a new native buffer used with posix_memalign
     */
-   public static native ByteBuffer newAlignedBuffer(int size, int alignment);
+   public static MemorySegment newAlignedBuffer(int size, int alignment) {
+      return FFMNativeHelper.newAlignedBuffer(size, alignment);
+   }
 
    /**
     * This will call posix free to release the inner buffer allocated at {@link #newAlignedBuffer(int, int)}.
     *
     * @param buffer a native buffer allocated with {@link #newAlignedBuffer(int, int)}.
     */
-   public static native void freeBuffer(ByteBuffer buffer);
+   public static void freeBuffer(MemorySegment buffer) {
+      FFMNativeHelper.freeBuffer(buffer);
+   }
 
    /**
     * Documented at {@link LibaioFile#write(long, int, java.nio.ByteBuffer, SubmitInfo)}.
     */
-   native void submitWrite(int fd,
-                           ByteBuffer libaioContext,
+   void submitWrite(int fd,
+                           MemorySegment libaioContext,
                            long position,
                            int size,
                            ByteBuffer bufferWrite,
-                           Callback callback) throws IOException;
+                           Callback callback) throws IOException {
+      this.ffmNativeHelper.submitWrite(fd, libaioContext, position, size, bufferWrite, callback);
+   }
 
    /**
     * Documented at {@link LibaioFile#read(long, int, java.nio.ByteBuffer, SubmitInfo)}.
     */
-   native void submitRead(int fd,
-                          ByteBuffer libaioContext,
+   void submitRead(int fd,
+                          MemorySegment libaioContext,
                           long position,
                           int size,
                           ByteBuffer bufferWrite,
-                          Callback callback) throws IOException;
+                          Callback callback) throws IOException {
+      this.ffmNativeHelper.submitRead(fd, libaioContext, position, size, bufferWrite, callback);
+   }
 
    /**
     * Note: this shouldn't be done concurrently.
@@ -447,32 +456,54 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
     * <p/>
     * The callbacks will include the original callback sent at submit (read or write).
     */
-   native int poll(ByteBuffer libaioContext, Callback[] callbacks, int min, int max);
+   int poll(MemorySegment libaioContext, Callback[] callbacks, int min, int max) {
+      return this.ffmNativeHelper.poll(libaioContext, callbacks, min, max);
+   }
 
    /**
     * This method will block as long as the context is open.
     */
-   native void blockedPoll(ByteBuffer libaioContext, boolean useFdatasync);
+   void blockedPoll(MemorySegment libaioContext, boolean useFdatasync) {
+      this.ffmNativeHelper.blockedPoll(libaioContext, useFdatasync);
+   }
 
-   static native int getNativeVersion();
+   static int getNativeVersion() {
+      return FFMNativeHelper.getNativeVersion();
+   }
 
-   public static native boolean lock(int fd);
+   public static boolean lock(int fd) {
+      return FFMNativeHelper.lock(fd);
+   }
 
-   public static native void memsetBuffer(ByteBuffer buffer, int size);
+   public static void memsetBuffer(ByteBuffer buffer, int size) {
+      FFMNativeHelper.memsetBuffer(buffer, size);
+   }
 
-   static native long getSize(int fd);
+   static long getSize(int fd) throws IOException {
+      return FFMNativeHelper.getSize(fd);
+   }
 
-   static native int getBlockSizeFD(int fd);
+   static int getBlockSizeFD(int fd) throws IOException {
+      return FFMNativeHelper.getBlockSizeFD(fd);
+   }
 
-   public static int getBlockSize(File path) {
+   public static int getBlockSize(File path) throws IOException {
       return getBlockSize(path.getAbsolutePath());
    }
 
-   public static native int getBlockSize(String path);
+   public static int getBlockSize(String path) throws IOException {
+      return FFMNativeHelper.getBlockSize(path);
+   }
 
-   static native void fallocate(int fd, long size);
+   static void fallocate(int fd, long size) throws IOException {
+      FFMNativeHelper.fallocate(fd, size);
+   }
 
-   static native void fill(int fd, int alignment, long size);
+   static void fill(int fd, int alignment, long size) throws IOException {
+      FFMNativeHelper.fill(fd, alignment, size);
+   }
 
-   static native void writeInternal(int fd, long position, long size, ByteBuffer bufferWrite) throws IOException;
+   static void writeInternal(int fd, long position, long size, ByteBuffer bufferWrite) throws IOException {
+      FFMNativeHelper.writeInternal(fd, position, size, bufferWrite);
+   }
 }
