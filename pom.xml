@@ -47,12 +47,12 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
-        <maven.compiler.source>11</maven.compiler.source>
-        <maven.compiler.target>11</maven.compiler.target>
-        <maven.compiler.release>11</maven.compiler.release>
+        <maven.compiler.source>22</maven.compiler.source>
+        <maven.compiler.target>22</maven.compiler.target>
+        <maven.compiler.release>22</maven.compiler.release>
 
         <activemq-surefire-argline>
-            -Dtest.stress.time=${test.stress.time} -Djava.library.path="${activemq.basedir}/target/lib/linux-${os.arch}"
+            -Dtest.stress.time=${test.stress.time} -Djava.library.path="${activemq.basedir}/target/lib/linux-${os.arch}" --enable-native-access=ALL-UNNAMED
         </activemq-surefire-argline>
         <activemq.basedir>${project.basedir}</activemq.basedir>
 
@@ -97,6 +97,18 @@
             <version>${junit.version}</version>
             <scope>test</scope>
             <!-- License: EPL 1.0 -->
+        </dependency>
+        <dependency>
+            <groupId>org.junit.vintage</groupId>
+            <artifactId>junit-vintage-engine</artifactId>
+            <version>5.10.2</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.10.2</version>
+            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.jacoco</groupId>
@@ -428,7 +440,7 @@
                 <configuration>
                     <instructions>
                         <!-- Adding Bundle-NativeCode to allow loading library from bundle. The asterisk at the end is important, so bundle resolves also without a matching library, e.g. on Windows. -->
-                        <Bundle-NativeCode>lib/linux-i686/libartemis-native-32.so; osname=Linux; processor=x86, lib/linux-x86_64/libartemis-native-64.so; osname=Linux; processor=x86-64, *</Bundle-NativeCode>
+<!--                        <Bundle-NativeCode>lib/linux-i686/libartemis-native-32.so; osname=Linux; processor=x86, lib/linux-x86_64/libartemis-native-64.so; osname=Linux; processor=x86-64, *</Bundle-NativeCode>-->
                     </instructions>
                 </configuration>
             </plugin>

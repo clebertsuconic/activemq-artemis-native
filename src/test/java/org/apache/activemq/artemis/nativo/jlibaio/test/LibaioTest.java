@@ -20,6 +20,7 @@ package org.apache.activemq.artemis.nativo.jlibaio.test;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.lang.ref.Cleaner;
 import java.lang.ref.WeakReference;
 import java.nio.ByteBuffer;
@@ -129,23 +130,23 @@ public class LibaioTest {
       LibaioFile fileDescriptor = control.openFile(temporaryFolder.newFile("test.bin"), true);
       fileDescriptor.fallocate(size);
 
-      ByteBuffer buffer = fileDescriptor.newBuffer(size);
-      fileDescriptor.read(0, size, buffer, new TestInfo());
+      MemorySegment buffer = fileDescriptor.newBuffer(size);
+      fileDescriptor.read(0, size, buffer.asByteBuffer(), new TestInfo());
 
       TestInfo[] callbacks = new TestInfo[1];
       control.poll(callbacks, 1, 1);
 
       fileDescriptor.close();
 
-      buffer.position(0);
+      buffer.asByteBuffer().position(0);
 
       LibaioFile fileDescriptor2 = control.openFile(temporaryFolder.newFile("test2.bin"), true);
       fileDescriptor2.fill(fileDescriptor.getBlockSize(), size);
-      fileDescriptor2.read(0, size, buffer, new TestInfo());
+      fileDescriptor2.read(0, size, buffer.asByteBuffer(), new TestInfo());
 
       control.poll(callbacks, 1, 1);
       for (int i = 0; i < size; i++) {
-         Assert.assertEquals(0, buffer.get());
+         Assert.assertEquals(0, buffer.asByteBuffer().get());
       }
 
       LibaioContext.freeBuffer(buffer);
@@ -180,11 +181,11 @@ public class LibaioTest {
       logger.debug("blockSize = " + fileDescriptor[0].getBlockSize());
       logger.debug("blockSize /tmp= " + LibaioContext.getBlockSize("/tmp"));
 
-      ByteBuffer buffer = LibaioContext.newAlignedBuffer(4096, 4096);
+      MemorySegment buffer = LibaioContext.newAlignedBuffer(4096, 4096);
 
       try {
          for (int i = 0; i < 4096; i++) {
-            buffer.put((byte) 'a');
+            buffer.asByteBuffer().put((byte) 'a');
          }
 
          TestInfo callback = new TestInfo();
@@ -192,7 +193,7 @@ public class LibaioTest {
 
          for (int i = 0; i < LIBAIO_QUEUE_SIZE / 2; i++) {
             for (LibaioFile file : fileDescriptor) {
-               file.write(i * 4096, 4096, buffer, callback);
+               file.write(i * 4096, 4096, buffer.asByteBuffer(), callback);
             }
          }
 
@@ -203,8 +204,8 @@ public class LibaioTest {
          }
 
          for (LibaioFile file : fileDescriptor) {
-            ByteBuffer bigbuffer = LibaioContext.newAlignedBuffer(4096 * 25, 4096);
-            file.read(0, 4096 * 25, bigbuffer, callback);
+            MemorySegment bigbuffer = LibaioContext.newAlignedBuffer(4096 * 25, 4096);
+            file.read(0, 4096 * 25, bigbuffer.asByteBuffer(), callback);
             Assert.assertEquals(1, control.poll(callbacks, 1, LIBAIO_QUEUE_SIZE));
 
             for (Object returnedCallback : callbacks) {
@@ -212,7 +213,7 @@ public class LibaioTest {
             }
 
             for (int i = 0; i < 4096 * 25; i++) {
-               Assert.assertEquals((byte) 'a', bigbuffer.get());
+               Assert.assertEquals((byte) 'a', bigbuffer.asByteBuffer().get());
             }
 
             LibaioContext.freeBuffer(bigbuffer);
@@ -233,16 +234,16 @@ public class LibaioTest {
       LibaioFile fileDescriptor = control.openFile(temporaryFolder.newFile("test.bin"), true);
 
       // ByteBuffer buffer = ByteBuffer.allocateDirect(4096);
-      ByteBuffer buffer = LibaioContext.newAlignedBuffer(4096, 4096);
+      MemorySegment buffer = LibaioContext.newAlignedBuffer(4096, 4096);
 
       try {
          for (int i = 0; i < 4096; i++) {
-            buffer.put((byte) 'a');
+            buffer.asByteBuffer().put((byte) 'a');
          }
 
-         buffer.rewind();
+         buffer.asByteBuffer().rewind();
 
-         fileDescriptor.write(0, 4096, buffer, callback);
+         fileDescriptor.write(0, 4096, buffer.asByteBuffer(), callback);
 
          int retValue = control.poll(callbacks, 1, LIBAIO_QUEUE_SIZE);
          Assert.assertEquals(1, retValue);
@@ -254,21 +255,21 @@ public class LibaioTest {
          buffer = LibaioContext.newAlignedBuffer(4096, 4096);
 
          for (int i = 0; i < 4096; i++) {
-            buffer.put((byte) 'B');
+            buffer.asByteBuffer().put((byte) 'B');
          }
 
-         fileDescriptor.write(0, 4096, buffer, null);
+         fileDescriptor.write(0, 4096, buffer.asByteBuffer(), new TestInfo());
 
          Assert.assertEquals(1, control.poll(callbacks, 1, LIBAIO_QUEUE_SIZE));
 
-         buffer.rewind();
+         buffer.asByteBuffer().rewind();
 
-         fileDescriptor.read(0, 4096, buffer, null);
+         fileDescriptor.read(0, 4096, buffer.asByteBuffer(), new TestInfo());
 
          Assert.assertEquals(1, control.poll(callbacks, 1, LIBAIO_QUEUE_SIZE));
 
          for (int i = 0; i < 4096; i++) {
-            Assert.assertEquals('B', buffer.get());
+            Assert.assertEquals('B', buffer.asByteBuffer().get());
          }
       } finally {
          LibaioContext.freeBuffer(buffer);
@@ -316,13 +317,13 @@ public class LibaioTest {
             buffer.put((byte) 'B');
          }
 
-         fileDescriptor.write(0, BUFFER_SIZE, buffer, null);
+         fileDescriptor.write(0, BUFFER_SIZE, buffer, new TestInfo());
 
          Assert.assertEquals(1, control.poll(callbacks, 1, LIBAIO_QUEUE_SIZE));
 
          buffer.rewind();
 
-         fileDescriptor.read(0, 50, buffer, null);
+         fileDescriptor.read(0, 50, buffer, new TestInfo());
 
          Assert.assertEquals(1, control.poll(callbacks, 1, LIBAIO_QUEUE_SIZE));
 
@@ -347,28 +348,28 @@ public class LibaioTest {
 
       LibaioFile fileDescriptor = control.openFile(file, true);
 
-      ByteBuffer buffer = LibaioContext.newAlignedBuffer(4096, 4096);
+      MemorySegment buffer = LibaioContext.newAlignedBuffer(4096, 4096);
 
       final int BUFFER_SIZE = 4096;
       try {
          for (int i = 0; i < BUFFER_SIZE; i++) {
-            buffer.put((byte) '@');
+            buffer.asByteBuffer().put((byte) '@');
          }
 
-         fileDescriptor.write(0, BUFFER_SIZE, buffer, callback);
+         fileDescriptor.write(0, BUFFER_SIZE, buffer.asByteBuffer(), callback);
          Assert.assertEquals(1, control.poll(callbacks, 1, LIBAIO_QUEUE_SIZE));
          Assert.assertSame(callback, callbacks[0]);
 
-         buffer.rewind();
+         buffer.asByteBuffer().rewind();
 
-         fileDescriptor.read(0, BUFFER_SIZE, buffer, callback);
+         fileDescriptor.read(0, BUFFER_SIZE, buffer.asByteBuffer(), callback);
 
          Assert.assertEquals(1, control.poll(callbacks, 1, LIBAIO_QUEUE_SIZE));
 
          Assert.assertSame(callback, callbacks[0]);
 
          for (int i = 0; i < BUFFER_SIZE; i++) {
-            Assert.assertEquals('@', buffer.get());
+            Assert.assertEquals('@', buffer.asByteBuffer().get());
          }
       } finally {
          LibaioContext.freeBuffer(buffer);
@@ -406,7 +407,8 @@ public class LibaioTest {
 
          logger.debug("Error:" + callbacks[0]);
 
-         buffer = fileDescriptor.newBuffer(4096);
+         MemorySegment memorySegment = fileDescriptor.newBuffer(4096);
+         buffer = memorySegment.asByteBuffer();
          for (int i = 0; i < 4096; i++) {
             buffer.put((byte) 'z');
          }
@@ -444,17 +446,17 @@ public class LibaioTest {
 
       LibaioFile<TestInfo> fileDescriptor = control.openFile(file, true);
 
-      ByteBuffer bufferWrite = LibaioContext.newAlignedBuffer(4096, 4096);
+      MemorySegment bufferWrite = LibaioContext.newAlignedBuffer(4096, 4096);
 
       try {
          for (int i = 0; i < 4096; i++) {
-            bufferWrite.put((byte) 'B');
+            bufferWrite.asByteBuffer().put((byte) 'B');
          }
 
          for (int j = 0; j < LIBAIO_QUEUE_SIZE * 2; j++) {
             for (int i = 0; i < LIBAIO_QUEUE_SIZE; i++) {
                TestInfo countClass = new TestInfo();
-               fileDescriptor.write(i * 4096, 4096, bufferWrite, countClass);
+               fileDescriptor.write(i * 4096, 4096, bufferWrite.asByteBuffer(), countClass);
             }
 
             Assert.assertEquals(LIBAIO_QUEUE_SIZE, control.poll(callbacks, LIBAIO_QUEUE_SIZE, LIBAIO_QUEUE_SIZE));
@@ -507,7 +509,8 @@ public class LibaioTest {
    @Test
    public void testMemset() throws Exception {
 
-      ByteBuffer buffer = LibaioContext.newAlignedBuffer(4096 * 8, 4096);
+      MemorySegment memorySegment = LibaioContext.newAlignedBuffer(4096 * 8, 4096);
+      ByteBuffer buffer = memorySegment.asByteBuffer();
 
       for (int i = 0; i < buffer.capacity(); i++) {
          buffer.put((byte) 'z');
@@ -527,7 +530,7 @@ public class LibaioTest {
          Assert.assertEquals((byte) 0, buffer.get());
       }
 
-      LibaioContext.freeBuffer(buffer);
+      LibaioContext.freeBuffer(memorySegment);
 
    }
 
@@ -570,7 +573,8 @@ public class LibaioTest {
 
       fileDescriptor = control.openFile(temporaryFolder.newFile(), true);
 
-      ByteBuffer buffer = fileDescriptor.newBuffer(4096);
+      MemorySegment memorySegment = fileDescriptor.newBuffer(4096);
+      ByteBuffer buffer = memorySegment.asByteBuffer();
 
       try {
          for (int i = 0; i < 4096; i++) {
@@ -628,7 +632,7 @@ public class LibaioTest {
 
          Assert.assertTrue(exceptionThrown);
       } finally {
-         LibaioContext.freeBuffer(buffer);
+         LibaioContext.freeBuffer(memorySegment);
       }
    }
 
@@ -669,7 +673,8 @@ public class LibaioTest {
 
       MyCallback callback = new MyCallback();
 
-      ByteBuffer buffer = LibaioContext.newAlignedBuffer(4096, 4096);
+      MemorySegment memorySegment = LibaioContext.newAlignedBuffer(4096, 4096);
+      ByteBuffer buffer = memorySegment.asByteBuffer();
 
       for (int i = 0; i < 4096; i++) {
          buffer.put((byte) 'a');

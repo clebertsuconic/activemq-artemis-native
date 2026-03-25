@@ -19,6 +19,7 @@ package org.apache.activemq.artemis.nativo.jlibaio.test;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.util.concurrent.TimeUnit;
 
@@ -207,7 +208,8 @@ public class LibaioStressTest {
         LibaioFile fileDescriptor = control.openFile(file, true);
 
         // ByteBuffer buffer = ByteBuffer.allocateDirect(4096);
-        ByteBuffer buffer = LibaioContext.newAlignedBuffer(4096, 4096);
+        MemorySegment memorySegment = LibaioContext.newAlignedBuffer(4096, 4096);
+        ByteBuffer buffer = memorySegment.asByteBuffer();
 
         int maxSize = 4096 * LIBAIO_QUEUE_SIZE;
         fileDescriptor.fill(4096, maxSize);

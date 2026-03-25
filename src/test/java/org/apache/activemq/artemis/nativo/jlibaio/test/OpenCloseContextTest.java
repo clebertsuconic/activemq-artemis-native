@@ -18,6 +18,7 @@
 package org.apache.activemq.artemis.nativo.jlibaio.test;
 
 import java.io.File;
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -51,7 +52,8 @@ public class OpenCloseContextTest {
 
    @Test
    public void testRepeatOpenCloseContext() throws Exception {
-      ByteBuffer buffer = LibaioContext.newAlignedBuffer(512, 512);
+      MemorySegment memorySegment = LibaioContext.newAlignedBuffer(512, 512);
+      ByteBuffer buffer = memorySegment.asByteBuffer();
       for (int i = 0; i < 512; i++)
          buffer.put((byte) 'x');
 
@@ -109,7 +111,8 @@ public class OpenCloseContextTest {
 
    @Test
    public void testRepeatOpenCloseContext2() throws Exception {
-      ByteBuffer buffer = LibaioContext.newAlignedBuffer(512, 512);
+      MemorySegment memorySegment = LibaioContext.newAlignedBuffer(512, 512);
+      ByteBuffer buffer = memorySegment.asByteBuffer();
       for (int i = 0; i < 512; i++)
          buffer.put((byte) 'x');
 
