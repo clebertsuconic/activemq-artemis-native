@@ -25,6 +25,7 @@ import java.lang.ref.Cleaner;
 import java.lang.ref.WeakReference;
 import java.nio.ByteBuffer;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.activemq.artemis.nativo.jlibaio.LibaioContext;
@@ -648,6 +649,8 @@ public class LibaioTest {
 
       t.start();
 
+      Semaphore semaphore = new Semaphore(20);
+
       int NUMBER_OF_BLOCKS = LIBAIO_QUEUE_SIZE * 10;
 
       final CountDownLatch latch = new CountDownLatch(NUMBER_OF_BLOCKS);
@@ -667,6 +670,9 @@ public class LibaioTest {
 
          @Override
          public void done() {
+            new Exception("hello1111").printStackTrace(System.out);
+            semaphore.release();
+            logger.info("Callback done");
             latch.countDown();
          }
       }
@@ -684,6 +690,7 @@ public class LibaioTest {
 
       for (int i = 0; i < NUMBER_OF_BLOCKS; i++) {
          aioFile.write(i * 4096, 4096, buffer, callback);
+         semaphore.acquire();
       }
 
       long end = System.currentTimeMillis();
