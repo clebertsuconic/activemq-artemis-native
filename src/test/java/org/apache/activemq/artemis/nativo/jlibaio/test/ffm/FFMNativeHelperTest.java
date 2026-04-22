@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.activemq.artemis.nativo.jlibaio.ffm.test;
+package org.apache.activemq.artemis.nativo.jlibaio.test.ffm;
 
 import org.apache.activemq.artemis.nativo.jlibaio.SubmitInfo;
 import org.apache.activemq.artemis.nativo.jlibaio.ffm.FFMNativeHelper;

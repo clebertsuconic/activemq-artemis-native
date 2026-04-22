@@ -30,7 +30,7 @@ import static org.apache.activemq.artemis.nativo.jlibaio.ffm.Constants.AIO_RING_
 import static org.apache.activemq.artemis.nativo.jlibaio.ffm.IOEvent.IO_EVENT_LAYOUT;
 
 public class AIORing {
-    private static final Logger logger = LoggerFactory.getLogger(AIORing.class);
+//    private static final Logger logger = LoggerFactory.getLogger(AIORing.class);
 
     /** There is no defined aio_ring anywhere in an include,
      This is an implementation detail, that is a binary contract.
@@ -70,7 +70,7 @@ public class AIORing {
         int magic = (int) AIO_RING_MAGIC_VH.getAcquire(header, 0L);
         int incompat = (int) AIO_RING_INCOMPAT_FEATURES_VH.getAcquire(header, 0L);
         int nr = (int) AIO_RING_NR_VH.getAcquire(header, 0L);
-        logger.trace("nr={}, magic={}, incompat={}", nr, magic, incompat);
+//        logger.trace("nr={}, magic={}, incompat={}", nr, magic, incompat);
 
         return magic == AIO_RING_MAGIC
                 && incompat == AIO_RING_INCOMPAT_FEATURES
@@ -97,7 +97,7 @@ public class AIORing {
         try {
             fullSize = Math.addExact(AIO_RING_HEADER_SIZE, Math.multiplyExact((long) nr, eventBytesize));
         } catch (ArithmeticException e) {
-            logger.warn("toAioRing: overflow computing ring size (nr={}, eventBytes={})", nr, eventBytesize);
+//            logger.warn("toAioRing: overflow computing ring size (nr={}, eventBytes={})", nr, eventBytesize);
             return MemorySegment.NULL;
         }
 

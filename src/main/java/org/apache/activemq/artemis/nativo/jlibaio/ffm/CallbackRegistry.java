@@ -25,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class CallbackRegistry<Callback extends SubmitInfo> {
-    private static final Logger logger = LoggerFactory.getLogger(CallbackRegistry.class);
+//    private static final Logger logger = LoggerFactory.getLogger(CallbackRegistry.class);
     private final ConcurrentHashMap<Long, Callback> registry = new ConcurrentHashMap<>();
     private final AtomicLong idGenerator = new AtomicLong(0);
 
@@ -44,7 +44,7 @@ public class CallbackRegistry<Callback extends SubmitInfo> {
             id = idGenerator.incrementAndGet();
         } while (id == -1 || id == 0);
         registry.put(id, callback);
-        logger.debug("CallbackRegistry::register id = {}, callback = {}", id, callback);
+//        logger.debug("CallbackRegistry::register id = {}, callback = {}", id, callback);
         return id;
     }
 
