@@ -135,12 +135,9 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
         }
     }
 
-    private final CallbackRegistry<Callback> registry;
-
     private final ReleaseCallback releaseCallback;
 
     public FFMNativeHelper(ReleaseCallback releaseCallback) {
-        this.registry = new CallbackRegistry<>();
         this.releaseCallback = releaseCallback;
     }
 
@@ -319,10 +316,10 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
         return forceSysCall.get() || !RING_REAPER;
     }
 
-    public IOControl newContext(int queueSize) {
+    public IOControl<Callback> newContext(int queueSize) {
 //        logger.debug("Initializing context with QueueSize={}", queueSize);
 
-        IOControl ioControl = new IOControl();
+        IOControl<Callback> ioControl = new IOControl<>();
         try {
             MemorySegment ioContext = ioQueueInit(queueSize);
             ioControl.setIoContext(ioContext);
@@ -348,7 +345,7 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
                     throw new OutOfMemoryError(
                             String.format("Arena memory allocation failed: iocb[%d/%d]", i, queueSize));
                 }
-                IOCBInit.setAioData(iocb, 0L);
+                IOCBInit.setAioData(iocb, i);
                 iocbPool[i] = iocb;
             }
             ioControl.setIocbPool(iocbPool);
@@ -430,7 +427,8 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
                 throw new IOException("Not enough space in libaio queue during shutdown");
             }
             ioPrepPOp(dumbIocb, DUMB_WRITE_HANDLER, MemorySegment.NULL, 0L, 0L, 1);
-            IOCBInit.setAioData(dumbIocb, -1L);
+            int iocbId = (int) IOCBInit.getAioData(dumbIocb);
+            ioControl.getIocbState().set(iocbId, -1);
 
             if(!submit(ioControl, dumbIocb)) {
 //                logger.warn("deleteContext: submit failed: Continuing cleanup");
@@ -631,21 +629,24 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
             throw new IOException("IOCB pool exhausted (used=" + ioControl.used() +
                     "/queueSize=" + ioControl.queueSize() + ")");
         }
-//        logger.trace("submitWrite called!");
-        long callbackId = registry.register(callback);
+        int callbackId = (int) IOCBInit.getAioData(iocb);
+//        logger.trace("submitWrite called! callbackId: {}", callbackId);
         boolean submitted = false;
         try {
+            if (!ioControl.getIocbState().compareAndSet(callbackId, 0, 1)) {
+                throw new IOException("submitWrite failed: callbackId=" + callbackId + " already in use");
+            }
+            ioControl.addCallback(callbackId, callback);
             bufferWrite.clear();
             ioPrepPOp(iocb, fd, MemorySegment.ofBuffer(bufferWrite), size, position, 1);
 
-            IOCBInit.setAioData(iocb, callbackId);
             submit(ioControl, iocb);
             submitted = true;
         } catch (Throwable e) {
             throw new IOException("submitWrite failed", e);
         } finally {
             if(!submitted) {
-                registry.removeCallbackById(callbackId);
+                ioControl.takeCallback(callbackId);
             }
         }
     }
@@ -690,25 +691,28 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
         }
 
 //        logger.trace("submitRead called!");
-        long callbackId = registry.register(callback);
+        long callbackId = IOCBInit.getAioData(iocb);
         boolean submitted = false;
         try {
+            if (!ioControl.getIocbState().compareAndSet((int) callbackId, 0, 1)) {
+                throw new IOException("submitRead failed: callbackId=" + callbackId + " already in use");
+            }
+            ioControl.addCallback((int) callbackId, callback);
             bufferWrite.clear();
             ioPrepPOp(iocb, fd, MemorySegment.ofBuffer(bufferWrite), size, position, 0);
 
-            IOCBInit.setAioData(iocb, callbackId);
             submit(ioControl, iocb);
             submitted = true;
         } catch (Throwable e) {
             throw new IOException("submitRead failed", e);
         } finally {
             if(!submitted) {
-                registry.removeCallbackById(callbackId);
+                ioControl.takeCallback((int) callbackId);
             }
         }
     }
 
-    public int poll(IOControl ioControl, Callback[] callbacks, int min, int max) {
+    public int poll(IOControl<Callback> ioControl, Callback[] callbacks, int min, int max) {
         if(ioControl == null || !ioControl.isValid()) {
 //            logger.warn("poll: invalid context");
             return 0;
@@ -734,20 +738,22 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
                 MemorySegment iocbp = event.get(ValueLayout.ADDRESS, 8L)
                         .reinterpret(64);
                 int eventResult = (int) event.get(ValueLayout.JAVA_LONG, 16L);
-//                logger.trace("poll[{}]: res={}, iocbp=0x{}", i, eventResult, Long.toHexString(iocbp.address()));
+//                logger.trace("poll[{}]: res={}, iocbp=0x{}, AioData: {}", i, eventResult, Long.toHexString(iocbp.address()),
+//                        IOCBInit.getAioData(iocbp));
 
                 if(eventResult < 0) {
 //                    logger.warn("poll[{}]: I/O error: {}", i, eventResult);
                 }
 
-                long callbackIdRaw = IOCBInit.getAioData(iocbp);
-                if(callbackIdRaw == 0L || callbackIdRaw == -1L) {
+                int callbackIdRaw = (int) IOCBInit.getAioData(iocbp);
+                int iocbState = ioControl.getIocbState().get(callbackIdRaw);
+                if(iocbState == 0 || iocbState == -1) {
 //                    logger.warn("poll[{}]: invalid callback=0x{}", i, Long.toHexString(callbackIdRaw));
                     ioControl.putIOCB(iocbp);
                     continue;
                 }
 
-                Callback callback = registry.findCallbackById(callbackIdRaw);
+                Callback callback = ioControl.takeCallback(callbackIdRaw);
                 if(callback != null) {
                     callbacks[i] = callback;
                     if(eventResult < 0) {
@@ -758,11 +764,11 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
                     if (releaseCallback != null) {
                         releaseCallback.release();
                     }
-                    registry.removeCallbackById(callbackIdRaw);
                 } else {
 //                    logger.warn("poll[{}]: callback not found for id=0x{}",
 //                            i, Long.toHexString(callbackIdRaw));
                 }
+                ioControl.getIocbState().set(callbackIdRaw, 0);
                 ioControl.putIOCB(iocbp);
             }
             return result;
@@ -772,7 +778,7 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
         }
     }
 
-    public void blockedPoll(IOControl ioControl, boolean useFdatasync) {
+    public void blockedPoll(IOControl<Callback> ioControl, boolean useFdatasync) {
 //        logger.debug("blockedPoll starting(useFdatasync={})", useFdatasync);
         if(ioControl == null || !ioControl.isValid()) {
 //            logger.warn("blockedPoll: invalid context");
@@ -830,13 +836,13 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
 
                         int eventResult = (int) event.get(ValueLayout.JAVA_LONG, 16L);
 
-                        long callbackIdRaw = IOCBInit.getAioData(iocbp);
+                        int callbackIdRaw = (int) IOCBInit.getAioData(iocbp);
 //                        logger.trace("blockedPoll: callbackIdRaw: {}", callbackIdRaw);
-                        IOCBInit.setAioData(iocbp, 0L); // this is to detect invalid elements on the buffer.
 
-                        if(callbackIdRaw != 0L) {
+                        // this IOCB state is to detect invalid elements on the buffer.
+                        if(ioControl.getIocbState().compareAndSet(callbackIdRaw, 1, 0)) {
                             ioControl.putIOCB(iocbp);
-                            Callback callback = registry.findCallbackById(callbackIdRaw);
+                            Callback callback = ioControl.takeCallback(callbackIdRaw);
                             if (callback != null) {
                                 if (eventResult < 0) {
 //                                    logger.error("blockedPoll[{}]: I/O error fd={}, {}", i, fd, eventResult);
@@ -848,7 +854,6 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
                                 if (releaseCallback != null) {
                                     releaseCallback.release();
                                 }
-                                registry.removeCallbackById(callbackIdRaw);
                             }
                         } else {
                             if(!forceSysCall.get()) {

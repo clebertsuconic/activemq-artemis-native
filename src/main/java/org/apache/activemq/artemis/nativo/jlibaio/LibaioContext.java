@@ -150,7 +150,7 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
    /**
     * the native ioContext including the structure created.
     */
-   private final IOControl ioContext;
+   private final IOControl<Callback> ioContext;
 
    private final AtomicBoolean closed = new AtomicBoolean(false);
 
@@ -376,7 +376,7 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
    /**
     * This is the queue for libaio, initialized with queueSize.
     */
-   private IOControl newContext(int queueSize) {
+   private IOControl<Callback> newContext(int queueSize) {
       return this.ffmNativeHelper.newContext(queueSize);
    }
 
@@ -464,7 +464,7 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
    /**
     * This method will block as long as the context is open.
     */
-   void blockedPoll(IOControl ioControl, boolean useFdatasync) {
+   void blockedPoll(IOControl<Callback> ioControl, boolean useFdatasync) {
       this.ffmNativeHelper.blockedPoll(ioControl, useFdatasync);
    }
 

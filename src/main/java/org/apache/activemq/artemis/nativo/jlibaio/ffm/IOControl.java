@@ -16,13 +16,15 @@
  */
 package org.apache.activemq.artemis.nativo.jlibaio.ffm;
 
+import org.apache.activemq.artemis.nativo.jlibaio.SubmitInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.foreign.MemorySegment;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.atomic.AtomicIntegerArray;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 
-public class IOControl {
+public class IOControl<Callback extends SubmitInfo> {
 //    private static final Logger logger = LoggerFactory.getLogger(IOControl.class);
 
     private final Object iocbLock = new Object();
@@ -35,6 +37,10 @@ public class IOControl {
     private int iocbGet;
     private int used;
     private MemorySegment[] iocbPool;
+    private AtomicReferenceArray<Callback> callbackRegistry;
+
+    // -1: delete, 0: free, 1: used
+    private AtomicIntegerArray iocbState;
 
     public MemorySegment ioContext() {
         return this.ioContext;
@@ -55,6 +61,8 @@ public class IOControl {
     }
     public void setQueueSize(int size) {
         this.queueSize = size;
+        callbackRegistry = new AtomicReferenceArray<>(size);
+        iocbState = new AtomicIntegerArray(size);
     }
 
     public int iocbPut() {
@@ -72,6 +80,20 @@ public class IOControl {
     }
     public void setIocbPool(MemorySegment[] iocbPool) {
         this.iocbPool = iocbPool;
+    }
+
+    public void addCallback(int idx, Callback callback) {
+        if (callbackRegistry.get(idx) != null) {
+            throw new IllegalStateException("callback already registered");
+        }
+        callbackRegistry.set(idx, callback);
+    }
+    public Callback takeCallback(int idx) {
+        return callbackRegistry.getAndSet(idx, null);
+    }
+
+    public AtomicIntegerArray getIocbState() {
+        return this.iocbState;
     }
 
     public void withIocbLock(Runnable action) {
