@@ -127,14 +127,14 @@ public class LibaioBenchmark {
 
     @Benchmark
     public void writeHeaderAndRecords() throws Exception {
-        CountDownLatch latch = new CountDownLatch(recordCount * 100);
+        CountDownLatch latch = new CountDownLatch(recordCount * 10);
         currentLatch.set(latch);
 
         try {
             fillHeader(fileId);
 //            libaioFile.write(0L, BLOCK_SIZE, headerBuffer, callback);
 
-            for (int j = 0; j < 100; j++) {
+            for (int j = 0; j < 10; j++) {
                 for (int i = 0; i < recordCount; i++) {
                     updateRecord(recordBuffer, fileId, i);
                     long offset = BLOCK_SIZE + ((long) i * BLOCK_SIZE);
