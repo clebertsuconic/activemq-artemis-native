@@ -139,9 +139,8 @@ public class FFMHandles {
             FunctionDescriptor.of(ValueLayout.JAVA_INT,
                     ValueLayout.ADDRESS,
                     ValueLayout.JAVA_LONG,
-                    ValueLayout.ADDRESS),
-            captureCallState
-    );
+                    ValueLayout.ADDRESS)
+    ).asFixedArity();
 
     static final MethodHandle FREE_BUF_HANDLE = LINKER.downcallHandle(
             STDLIB.find("free").orElseThrow(() ->

@@ -76,6 +76,8 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
 
     private static final AtomicBoolean forceSysCall = new AtomicBoolean(false);
 
+    private static final ThreadLocal<SharedContext> SHARED_CONTEXT = ThreadLocal.withInitial(SharedContext::new);
+
     private static final AtomicReference<Integer> DUMB_FD = new AtomicReference<>(-1);
 
     private static volatile String DUMB_PATH;
@@ -268,24 +270,21 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
 
     private int ioGetEvents(MemorySegment aioCtx, MemorySegment events, long min,
                                       long max, MemorySegment timeout) throws Throwable {
-        try(Arena arena = Arena.ofConfined()) {
-            MemorySegment captureState = arena.allocate(CAPTURE_STATE_LAYOUT);
-            // Direct syscall wrapper
-            int result = (int) IO_GETEVENTS_HANDLE.invoke(
-                    captureState,
-                    aioCtx,
-                    min,
-                    max,
-                    events,
-                    (timeout == null ? MemorySegment.NULL : timeout)
-            );
+        // Direct syscall wrapper
+        int result = (int) IO_GETEVENTS_HANDLE.invoke(
+                SHARED_CONTEXT.get().getStateCapture(),
+                aioCtx,
+                min,
+                max,
+                events,
+                (timeout == null ? MemorySegment.NULL : timeout)
+        );
 
-            if(result < 0) {
-                int errno = (int) ERRNO_VH.get(captureState, 0L);
+        if(result < 0) {
+            int errno = (int) ERRNO_VH.get(SHARED_CONTEXT.get().getStateCapture(), 0L);
 //                logger.warn("ioGetEvents: failed to call IO_GETEVENTS_HANDLE. result={}, errno={}", result, errno);
-            }
-            return result;
         }
+        return result;
     }
 
     private static void freeOneMegaBuffer() {
@@ -364,9 +363,8 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
         if (ioContext == null || ioContext.address() == 0) {
             return;
         }
-        try(Arena arena = Arena.ofConfined()) {
-            MemorySegment captureState = arena.allocate(CAPTURE_STATE_LAYOUT);
-            int result = (int) IO_QUEUE_RELEASE_HANDLE.invoke(captureState, ioContext);
+        try {
+            int result = (int) IO_QUEUE_RELEASE_HANDLE.invoke(SHARED_CONTEXT.get().getStateCapture(), ioContext);
             if(result < 0) {
 //                logger.warn("io_queue_release(0x{}) failed: errno={}",
 //                        Long.toHexString(ioContext.address()), ERRNO_VH.get(captureState, 0L));
@@ -582,29 +580,23 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
 
     private boolean submit(IOControl ioControl, MemorySegment iocb) throws IOException {
         Objects.requireNonNull(ioControl.ioContext(), "Attempted to submit I/O to a null context");
+        SharedContext ctx = SHARED_CONTEXT.get();
         int result = -1;
-        try(Arena arena = Arena.ofConfined()) {
-            MemorySegment captureState = arena.allocate(CAPTURE_STATE_LAYOUT);
-//            int currIdx = (ioControl.iocbGet() + ioControl.queueSize() - 1) % ioControl.queueSize();
-//            MemorySegment pointerInArray = ioControl.iocbArrayWithSize()
-//                    .asSlice((long) currIdx * 8L, 8L);
-
-            MemorySegment iocbArray = arena.allocate(ValueLayout.ADDRESS, 1);
-            iocbArray.setAtIndex(ValueLayout.JAVA_LONG, 0, iocb.address());
+        try {
+            ctx.getIocbArray().setAtIndex(ValueLayout.JAVA_LONG, 0, iocb.address());
 
 //            logger.trace("submit: ctx=0x{}, iocb=0x{}, iocbArray=0x{}",
 //                    Long.toHexString(ioControl.ioContext().address()),
 //                    Long.toHexString(iocb.address()),
 //                    Long.toHexString(iocbArray.address()));
 
-            result = (int) IO_SUBMIT_HANDLE.invoke(captureState,
+            result = (int) IO_SUBMIT_HANDLE.invokeExact(
                     ioControl.ioContext(),
                     1L,
-                    iocbArray);
+                    ctx.getIocbArray());
 
             if(result < 0) {
-                int errno = (int) ERRNO_VH.get(captureState, 0L);
-                throw new IOException("Error while submitting IO: errno = " + errno);
+                throw new IOException("Error while submitting IO: result = " + result);
             }
             return true;
         } catch (Throwable t) {
@@ -907,7 +899,7 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
                     " (capacity = " + buffer.capacity() + ")");
         }
 
-        try(Arena arena = Arena.ofConfined()) {
+        try {
             ByteBuffer dup = buffer.duplicate();
             dup.clear();
             MemorySegment seg = MemorySegment.ofBuffer(dup);
@@ -998,28 +990,26 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
     }
 
     public static void fallocate(int fd, long size) throws IOException {
-        try(Arena arena = Arena.ofConfined()) {
-            MemorySegment captureState = arena.allocate(CAPTURE_STATE_LAYOUT);
-
+        try {
             // fallocate(fd, mode=0, offset=0, len=size)
-            int res = (int) FALLOCATE_HANDLE.invoke(captureState, fd, 0, 0L, size);
+            int res = (int) FALLOCATE_HANDLE.invoke(SHARED_CONTEXT.get().getStateCapture(), fd, 0, 0L, size);
             if(res < 0) {
-                int errno = (int) ERRNO_VH.get(captureState, 0L);
+                int errno = (int) ERRNO_VH.get(SHARED_CONTEXT.get().getStateCapture(), 0L);
                 throw new IOException("fallocate failed fd="
                         + fd + " size="
                         + size + ": errno= "
                         + errno);
             }
             // fsync(fd) - ensure allocation hits the disk
-            res = (int) FSYNC_HANDLE.invoke(captureState, fd);
+            res = (int) FSYNC_HANDLE.invoke(SHARED_CONTEXT.get().getStateCapture(), fd);
             if(res < 0) {
-                int errno = (int) ERRNO_VH.get(captureState, 0L);
+                int errno = (int) ERRNO_VH.get(SHARED_CONTEXT.get().getStateCapture(), 0L);
 //                logger.warn("fsync after allocation failed fd={}: errno={}", fd, errno);
             }
             //lseek(fd, 0, SEEK_SET) - reset position
-            long pos = (long) LSEEK_HANDLE.invoke(captureState, fd, 0L, 0);
+            long pos = (long) LSEEK_HANDLE.invoke(SHARED_CONTEXT.get().getStateCapture(), fd, 0L, 0);
             if(pos < 0) {
-                int errno = (int) ERRNO_VH.get(captureState, 0L);
+                int errno = (int) ERRNO_VH.get(SHARED_CONTEXT.get().getStateCapture(), 0L);
 //                logger.warn("lseek reset failed fd={}: errno={}", fd, errno);
             }
 //            logger.debug("fallocate(fd={}, size={}) + fsync + lseek(reset)", fd, size);
@@ -1050,16 +1040,16 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
         //verify/create 1MB buffer
         verifyBuffer(alignment);
 
-        try(Arena arena = Arena.ofConfined()) {
-            MemorySegment captureState = arena.allocate(CAPTURE_STATE_LAYOUT);
+        try {
             // lseek (fd, 0, SEEK_SET)
-            LSEEK_HANDLE.invoke(captureState, fd, 0L, 0);
+            LSEEK_HANDLE.invoke(SHARED_CONTEXT.get().getStateCapture(), fd, 0L, 0);
             //Write full blocks
             for (long i=0; i<blocks; i++) {
                 MemorySegment bufferAddrs = oneMegaBuffer;
-                long written = (long) WRITE_HANDLE.invoke(captureState, fd, bufferAddrs, ONE_MEGA);
+                long written = (long) WRITE_HANDLE.invoke(SHARED_CONTEXT.get().getStateCapture(),
+                        fd, bufferAddrs, ONE_MEGA);
                 if (written < 0) {
-                    int errno = (int) ERRNO_VH.get(captureState, 0L);
+                    int errno = (int) ERRNO_VH.get(SHARED_CONTEXT.get().getStateCapture(), 0L);
                     throw new IOException("write failed block " + i + ": errno= " + errno);
                 }
             }
@@ -1067,15 +1057,16 @@ public class FFMNativeHelper<Callback extends SubmitInfo> {
             // Remainder
             if (rest > 0) {
                 MemorySegment bufferAddrs = oneMegaBuffer;
-                long written = (long) WRITE_HANDLE.invoke(captureState, fd, bufferAddrs, rest);
+                long written = (long) WRITE_HANDLE.invoke(SHARED_CONTEXT.get().getStateCapture(),
+                        fd, bufferAddrs, rest);
                 if (written < 0) {
-                    int errno = (int) ERRNO_VH.get(captureState, 0L);
+                    int errno = (int) ERRNO_VH.get(SHARED_CONTEXT.get().getStateCapture(), 0L);
                     throw new IOException("write rest failed: errno= " + errno);
                 }
             }
 
             //Reset position
-            LSEEK_HANDLE.invoke(captureState, fd, 0L, 0);
+            LSEEK_HANDLE.invoke(SHARED_CONTEXT.get().getStateCapture(), fd, 0L, 0);
         } catch (Throwable t) {
             throw new IOException("fill failed fd=" + fd + " size=" + size, t);
         }
